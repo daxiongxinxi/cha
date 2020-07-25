@@ -20,15 +20,35 @@ function Env(name, opts) {
     }
 
     isSurge() {
-      return 'undefined' !== typeof $httpClient
+      return 'undefined' !== typeof $httpClient && 'undefined' === typeof $loon
     }
 
     isLoon() {
       return 'undefined' !== typeof $loon
     }
 
+    getScript(url) {
+      return new Promise((resolve) => {
+        $.get({ url }, (err, resp, body) => resolve(body))
+      })
+    }
+
+    runScript(script) {
+      return new Promise((resolve) => {
+        const httpapi = this.getdata('@chavy_boxjs_userCfgs.httpapi')
+        console.log(httpapi)
+        const [key, addr] = httpapi.split('@')
+        const opts = {
+          url: `http://${addr}/v1/scripting/evaluate`,
+          body: { script_text: script, mock_type: 'cron', timeout: 5 },
+          headers: { 'X-Key': key, 'Accept': '*/*' }
+        }
+        $.post(opts, (err, resp, body) => resolve(body))
+      })
+    }
+
     loaddata() {
-      if (this.isNode) {
+      if (this.isNode()) {
         this.fs = this.fs ? this.fs : require('fs')
         this.path = this.path ? this.path : require('path')
         const curDirDataFilePath = this.path.resolve(this.dataFile)
@@ -39,7 +59,7 @@ function Env(name, opts) {
           const datPath = isCurDirDataFile ? curDirDataFilePath : rootDirDataFilePath
           try {
             return JSON.parse(this.fs.readFileSync(datPath))
-          } catch {
+          } catch (e) {
             return {}
           }
         } else return {}
@@ -47,7 +67,7 @@ function Env(name, opts) {
     }
 
     writedata() {
-      if (this.isNode) {
+      if (this.isNode()) {
         this.fs = this.fs ? this.fs : require('fs')
         this.path = this.path ? this.path : require('path')
         const curDirDataFilePath = this.path.resolve(this.dataFile)
@@ -113,7 +133,7 @@ function Env(name, opts) {
           this.lodash_set(objedval, paths, val)
           issuc = this.setval(JSON.stringify(objedval), objkey)
           console.log(`${objkey}: ${JSON.stringify(objedval)}`)
-        } catch {
+        } catch (e) {
           const objedval = {}
           this.lodash_set(objedval, paths, val)
           issuc = this.setval(JSON.stringify(objedval), objkey)
@@ -220,8 +240,8 @@ function Env(name, opts) {
           if (!err && resp) {
             resp.body = body
             resp.statusCode = resp.status
-            callback(err, resp, body)
           }
+          callback(err, resp, body)
         })
       } else if (this.isQuanX()) {
         opts.method = 'POST'
@@ -248,16 +268,38 @@ function Env(name, opts) {
     /**
      * 系统通知
      *
+     * > 通知参数: 同时支持 QuanX 和 Loon 两种格式, EnvJs根据运行环境自动转换, Surge 环境不支持多媒体通知
+     *
+     * 示例:
+     * $.msg(title, subt, desc, 'twitter://')
+     * $.msg(title, subt, desc, { 'open-url': 'twitter://', 'media-url': 'https://github.githubassets.com/images/modules/open_graph/github-mark.png' })
+     * $.msg(title, subt, desc, { 'open-url': 'https://bing.com', 'media-url': 'https://github.githubassets.com/images/modules/open_graph/github-mark.png' })
+     *
      * @param {*} title 标题
      * @param {*} subt 副标题
      * @param {*} desc 通知详情
      * @param {*} opts 通知参数
+     *
      */
     msg(title = name, subt = '', desc = '', opts) {
+      const toEnvOpts = (rawopts) => {
+        if (!rawopts || (!this.isLoon() && this.isSurge())) return rawopts
+        if (typeof rawopts === 'string') {
+          if (this.isLoon()) return rawopts
+          else if (this.isQuanX()) return { 'open-url': rawopts }
+          else return undefined
+        } else if (typeof rawopts === 'object' && (rawopts['open-url'] || rawopts['media-url'])) {
+          if (this.isLoon()) return rawopts['open-url']
+          else if (this.isQuanX()) return rawopts
+          else undefined
+        } else {
+          return undefined
+        }
+      }
       if (this.isSurge() || this.isLoon()) {
-        $notification.post(title, subt, desc, opts)
+        $notification.post(title, subt, desc, toEnvOpts(opts))
       } else if (this.isQuanX()) {
-        $notify(title, subt, desc, opts)
+        $notify(title, subt, desc, toEnvOpts(opts))
       }
       this.logs.push('', '==============📣系统通知📣==============')
       this.logs.push(title)
@@ -286,7 +328,7 @@ function Env(name, opts) {
       return new Promise((resolve) => setTimeout(resolve, time))
     }
 
-    done(val = null) {
+    done(val = {}) {
       const endTime = new Date().getTime()
       const costTime = (endTime - this.startTime) / 1000
       this.log('', `🔔${this.name}, 结束! 🕛 ${costTime} 秒`)
